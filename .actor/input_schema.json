@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "schemaVersion": 1,
+  "title": "IG Reel Input",
+  "description": "Input schema for the IG reel metadata actor. Provide a single Instagram reel URL.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["url"],
+  "properties": {
+    "url": {
+      "title": "Reel URL",
+      "description": "A full Instagram reel URL, e.g. https://www.instagram.com/reel/ClR1goqOjUm/",
+      "type": "string",
+      "pattern": "^https?:\\/\\/www\\.instagram\\.com\\/reel\\/.+$",
+      "editor": "textfield"
+    }
+  }
+}
