@@ -9,6 +9,7 @@
     "dependencies": {
         "apify": "^3.4.2",
         "@crawlee/puppeteer": "^3.0.0",
+        "puppeteer": "^22.0.0",
         "tsx": "^4.20.3"
     },
     "devDependencies": {
