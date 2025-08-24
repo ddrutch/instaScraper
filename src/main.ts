@@ -246,7 +246,7 @@ const crawler = new PuppeteerCrawler({
             try {
                 console.log('Extracting audio information...');
                 
-                // Strategy 1: Look for clean "Artist • Song" pattern
+                // Strategy 1: Look for clean "Artist • Song" pattern (this is the audio track)
                 const cleanAudioPattern = /([A-Za-z][A-Za-z0-9\s]{2,30})\s*•\s*([A-Za-z][A-Za-z0-9\s]{2,30})/g;
                 const cleanAudioMatch = pageText.match(cleanAudioPattern);
                 
@@ -259,7 +259,7 @@ const crawler = new PuppeteerCrawler({
                             !match.includes('Verified') &&
                             match.length < 100) {
                             reelData.audioUsed = match.trim();
-                            console.log('Found clean audio pattern:', match.trim());
+                            console.log('Found audio track:', match.trim());
                             break;
                         }
                     }
@@ -309,8 +309,10 @@ const crawler = new PuppeteerCrawler({
                 reelData.audioUsed = 'Audio extraction failed';
             }
 
-            // Extract caption - quick DOM search
+            // Extract caption/description - find the actual user caption (NOT the audio)
             try {
+                console.log('Extracting user caption...');
+                
                 const captionSelectors = [
                     'span[dir="auto"]',
                     'div[class*="caption"] span',
@@ -322,24 +324,50 @@ const crawler = new PuppeteerCrawler({
                         const elements = await page.$$(selector);
                         for (const element of elements) {
                             const text = await page.evaluate((el: Element) => el.textContent, element);
-                            if (text && text.trim().length > 15 && 
+                            if (text && text.trim().length > 10 && 
                                 !text.includes('likes') && 
                                 !text.includes('views') && 
                                 !text.includes('comments') &&
-                                !text.includes('Follow')) {
+                                !text.includes('Follow') &&
+                                !text.includes('•') &&  // Exclude audio info (has bullet)
+                                !text.includes('The Black Eyed Peas') && // Exclude audio info
+                                !text.includes('Sign') &&
+                                !text.includes('Log')) {
                                 reelData.description = text.trim();
                                 // First line as title
                                 const firstLine = text.split('\n')[0].trim();
                                 if (firstLine.length <= 100 && firstLine.length > 5) {
                                     reelData.title = firstLine;
                                 }
-                                console.log('Found caption:', reelData.description.substring(0, 50) + '...');
+                                console.log('Found user caption:', reelData.description.substring(0, 50) + '...');
                                 break;
                             }
                         }
                         if (reelData.description) break;
                     } catch (e) {
                         // Continue to next selector
+                    }
+                }
+                
+                // Strategy 2: Look for caption patterns in page text (with emojis)
+                if (!reelData.description) {
+                    // Look for text that contains emojis or typical caption patterns
+                    const lines = pageText.split('\n');
+                    for (const line of lines) {
+                        const cleanLine = line.trim();
+                        if (cleanLine.length > 10 && cleanLine.length < 200 &&
+                            !cleanLine.includes('likes') &&
+                            !cleanLine.includes('views') &&
+                            !cleanLine.includes('comments') &&
+                            !cleanLine.includes('Follow') &&
+                            !cleanLine.includes('•') &&
+                            !cleanLine.includes('The Black Eyed Peas') &&
+                            (cleanLine.includes('🔥') || cleanLine.includes('😎') || cleanLine.includes('❤️') || cleanLine.toLowerCase().includes('rock'))) {
+                            reelData.description = cleanLine;
+                            reelData.title = cleanLine.split(' ')[0] + ' ' + cleanLine.split(' ')[1] + ' ' + cleanLine.split(' ')[2]; // First few words
+                            console.log('Found caption with emojis:', cleanLine);
+                            break;
+                        }
                     }
                 }
             } catch (e) {
