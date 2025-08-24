@@ -44,10 +44,6 @@ RUN npm --quiet set progress=false \
     && npm --version \
     && rm -r ~/.npm
 
-# Install Playwright browsers
-RUN npx playwright install chromium \
-    && npx playwright install-deps chromium
-
 # Copy built JS files from builder image
 COPY --from=builder /usr/src/app/dist ./dist
 

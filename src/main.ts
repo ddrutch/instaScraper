@@ -1,7 +1,7 @@
 // Apify SDK - toolkit for building Apify Actors (Read more at https://docs.apify.com/sdk/js/).
 import { Actor } from 'apify';
-// Crawlee Playwright - browser automation library for web scraping
-import { PlaywrightCrawler } from '@crawlee/playwright';
+// Crawlee Puppeteer - browser automation library for web scraping
+import { PuppeteerCrawler } from '@crawlee/puppeteer';
 
 // The init() call configures the Actor for its environment. It's recommended to start every Actor with an init().
 await Actor.init();
@@ -34,7 +34,7 @@ if (!url.match(/^https?:\/\/www\.instagram\.com\/reel\/.+$/)) {
 
 console.log(`Starting to scrape Instagram reel: ${url}`);
 
-const crawler = new PlaywrightCrawler({
+const crawler = new PuppeteerCrawler({
     // Use headless browser
     launchContext: {
         launchOptions: {
@@ -62,8 +62,8 @@ const crawler = new PlaywrightCrawler({
         };
 
         try {
-            // Wait for the page to load
-            await page.waitForLoadState('networkidle', { timeout: 30000 });
+            // Wait for the page to load (Puppeteer API)
+            await page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30000 }).catch(() => {});
             
             // Wait a bit more for dynamic content to load
             await page.waitForTimeout(3000);
@@ -83,7 +83,7 @@ const crawler = new PlaywrightCrawler({
                 for (const selector of usernameSelectors) {
                     const usernameElement = await page.$(selector);
                     if (usernameElement) {
-                        const username = await usernameElement.textContent();
+                        const username = await page.evaluate(el => el.textContent, usernameElement);
                         if (username && username.trim() && !username.includes('•')) {
                             reelData.username = username.trim();
                             break;
@@ -99,14 +99,13 @@ const crawler = new PlaywrightCrawler({
                 const audioSelectors = [
                     '[aria-label*="Audio"]',
                     '[data-testid="audio-attribution"]',
-                    'div[role="button"] span:has-text("Original audio")',
                     'a[href*="/audio/"]'
                 ];
                 
                 for (const selector of audioSelectors) {
                     const audioElement = await page.$(selector);
                     if (audioElement) {
-                        const audio = await audioElement.textContent();
+                        const audio = await page.evaluate(el => el.textContent, audioElement);
                         if (audio && audio.trim()) {
                             reelData.audioUsed = audio.trim();
                             break;
@@ -129,7 +128,7 @@ const crawler = new PlaywrightCrawler({
                 ];
                 
                 // Get all text content that might contain numbers
-                const allText = await page.textContent('body');
+                const allText = await page.evaluate(() => document.body.textContent);
                 
                 // Extract likes using regex
                 const likesMatch = allText?.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?[KM]?)\s*likes?/i);
@@ -144,9 +143,9 @@ const crawler = new PlaywrightCrawler({
                 }
                 
                 // Extract comments - look for comment button or text
-                const commentElements = await page.$$('button[aria-label*="comment"], span:has-text(" comments")');
+                const commentElements = await page.$$('button[aria-label*="comment"]');
                 for (const element of commentElements) {
-                    const text = await element.textContent();
+                    const text = await page.evaluate(el => el.textContent, element);
                     const commentMatch = text?.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?[KM]?)\s*comments?/i);
                     if (commentMatch) {
                         reelData.comments = parseMetric(commentMatch[1]);
@@ -170,7 +169,7 @@ const crawler = new PlaywrightCrawler({
                 for (const selector of captionSelectors) {
                     const captionElement = await page.$(selector);
                     if (captionElement) {
-                        const caption = await captionElement.textContent();
+                        const caption = await page.evaluate(el => el.textContent, captionElement);
                         if (caption && caption.trim() && caption.length > 10) {
                             reelData.description = caption.trim();
                             // Use first line as title if it's not too long

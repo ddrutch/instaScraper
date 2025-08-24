@@ -2,7 +2,7 @@
 
 This Apify Actor scrapes metadata from Instagram reels including username, audio used, engagement metrics (likes, views, comments), and captions.
 
-## Why Playwright instead of Axios + Cheerio?
+## Why Puppeteer instead of Axios + Cheerio?
 
 Instagram is a single-page application (SPA) that loads content dynamically with JavaScript. Traditional HTTP scraping with axios and cheerio won't work because:
 
@@ -11,11 +11,12 @@ Instagram is a single-page application (SPA) that loads content dynamically with
 3. **Dynamic Content**: The HTML structure changes frequently and content is generated client-side
 4. **Authentication Requirements**: Many endpoints require tokens and session data
 
-Playwright solves these issues by:
+Puppeteer solves these issues by:
 - Rendering JavaScript like a real browser
 - Handling dynamic content loading
 - Better at avoiding detection when configured properly
 - Can wait for content to load and interact with the page
+- Already available in Apify's infrastructure
 
 ## Features
 
@@ -64,10 +65,7 @@ Example output:
    npm install
    ```
 
-2. Install Playwright browsers:
-   ```bash
-   npx playwright install chromium
-   ```
+   *Note: Puppeteer browsers are already available in the Apify environment, so no additional browser installation is needed.*
 
 ## Development
 

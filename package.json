@@ -8,8 +8,7 @@
     },
     "dependencies": {
         "apify": "^3.4.2",
-        "@crawlee/playwright": "^3.0.0",
-        "playwright": "^1.40.0"
+        "@crawlee/puppeteer": "^3.0.0"
     },
     "devDependencies": {
         "@apify/eslint-config": "^1.0.0",
