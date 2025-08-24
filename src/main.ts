@@ -83,7 +83,7 @@ const crawler = new PuppeteerCrawler({
                 for (const selector of usernameSelectors) {
                     const usernameElement = await page.$(selector);
                     if (usernameElement) {
-                        const username = await page.evaluate(el => el.textContent, usernameElement);
+                        const username = await page.evaluate((el: Element) => el.textContent, usernameElement);
                         if (username && username.trim() && !username.includes('•')) {
                             reelData.username = username.trim();
                             break;
@@ -105,7 +105,7 @@ const crawler = new PuppeteerCrawler({
                 for (const selector of audioSelectors) {
                     const audioElement = await page.$(selector);
                     if (audioElement) {
-                        const audio = await page.evaluate(el => el.textContent, audioElement);
+                        const audio = await page.evaluate((el: Element) => el.textContent, audioElement);
                         if (audio && audio.trim()) {
                             reelData.audioUsed = audio.trim();
                             break;
@@ -145,7 +145,7 @@ const crawler = new PuppeteerCrawler({
                 // Extract comments - look for comment button or text
                 const commentElements = await page.$$('button[aria-label*="comment"]');
                 for (const element of commentElements) {
-                    const text = await page.evaluate(el => el.textContent, element);
+                    const text = await page.evaluate((el: Element) => el.textContent, element);
                     const commentMatch = text?.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?[KM]?)\s*comments?/i);
                     if (commentMatch) {
                         reelData.comments = parseMetric(commentMatch[1]);
@@ -169,7 +169,7 @@ const crawler = new PuppeteerCrawler({
                 for (const selector of captionSelectors) {
                     const captionElement = await page.$(selector);
                     if (captionElement) {
-                        const caption = await page.evaluate(el => el.textContent, captionElement);
+                        const caption = await page.evaluate((el: Element) => el.textContent, captionElement);
                         if (caption && caption.trim() && caption.length > 10) {
                             reelData.description = caption.trim();
                             // Use first line as title if it's not too long
