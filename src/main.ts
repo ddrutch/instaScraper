@@ -66,7 +66,7 @@ const crawler = new PuppeteerCrawler({
             await page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30000 }).catch(() => {});
             
             // Wait a bit more for dynamic content to load
-            await page.waitForTimeout(3000);
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
             // Try to extract data using various selectors
             // Instagram frequently changes their selectors, so we'll try multiple approaches
