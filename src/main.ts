@@ -50,9 +50,9 @@ const crawler = new PuppeteerCrawler({
             ],
         },
     },
-    // Configure request handling
-    requestHandlerTimeoutSecs: 60,
-    maxRequestRetries: 3,
+    // Configure request handling with reduced timeouts
+    requestHandlerTimeoutSecs: 30, // Reduced from 60
+    maxRequestRetries: 2, // Reduced from 3
     
     async requestHandler({ page, request }) {
         console.log(`Processing: ${request.url}`);
@@ -62,18 +62,21 @@ const crawler = new PuppeteerCrawler({
         };
 
         try {
-            // Navigate and wait for the page to load
-            await page.goto(request.url, { waitUntil: 'networkidle2', timeout: 30000 });
+            // Navigate to the reel
+            await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
             
-            // Wait for Instagram content to load
+            // Wait for video element instead of article (reels use video containers)
             try {
-                await page.waitForSelector('article', { timeout: 10000 });
+                await page.waitForSelector('video, [role="dialog"]', { timeout: 8000 });
+                console.log('Video/dialog element found - page loaded successfully');
             } catch (e) {
-                console.log('Article element not found, continuing anyway');
+                console.log('Video/dialog not found, trying alternative wait strategy');
+                // Fallback: just wait for any content to load
+                await page.waitForSelector('body', { timeout: 5000 });
             }
             
-            // Additional wait for dynamic content
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            // Short wait for dynamic content
+            await new Promise(resolve => setTimeout(resolve, 2000));
             
             // Check if we're blocked or redirected
             const currentUrl = page.url();
@@ -81,271 +84,160 @@ const crawler = new PuppeteerCrawler({
                 throw new Error(`Redirected away from reel: ${currentUrl}`);
             }
 
-            // Extract data using multiple strategies - Instagram's structure changes frequently
-            // Strategy 1: Try Instagram's internal API data (most reliable)
+            // Simplified extraction with faster fallbacks
+            console.log('Starting data extraction...');
+            
+            // Quick text extraction for pattern matching
+            const pageText = await page.evaluate(() => document.body.textContent || '');
+            console.log('Page text length:', pageText.length);
+            
+            // Extract username - focus on working patterns
             try {
-                const pageData = await page.evaluate(() => {
-                    // Look for Instagram's internal data in script tags
-                    const scripts = Array.from(document.querySelectorAll('script'));
-                    for (const script of scripts) {
-                        if (script.textContent && script.textContent.includes('"shortcode_media"')) {
-                            try {
-                                const match = script.textContent.match(/window\._sharedData\s*=\s*({.+?});/);
-                                if (match) {
-                                    return JSON.parse(match[1]);
-                                }
-                            } catch (e) {
-                                // Continue to next script
-                            }
-                        }
-                    }
-                    return null;
-                });
-                
-                if (pageData && pageData.entry_data?.PostPage?.[0]?.graphql?.shortcode_media) {
-                    const media = pageData.entry_data.PostPage[0].graphql.shortcode_media;
-                    reelData.username = media.owner?.username;
-                    reelData.likes = media.edge_media_preview_like?.count;
-                    reelData.views = media.video_view_count;
-                    reelData.comments = media.edge_media_to_comment?.count;
-                    reelData.description = media.edge_media_to_caption?.edges?.[0]?.node?.text;
-                    if (reelData.description) {
-                        const firstLine = reelData.description.split('\n')[0].trim();
-                        if (firstLine.length <= 100) {
-                            reelData.title = firstLine;
-                        }
-                    }
-                    console.log('Extracted data from internal API');
-                }
-            } catch (e) {
-                console.log('Could not extract from internal API:', e);
-            }
-            
-            // Strategy 2: Enhanced DOM selectors with multiple fallbacks
-            
-            // Extract username with improved selectors
-            if (!reelData.username) {
-                try {
+                // Method 1: URL-based extraction (most reliable)
+                const currentUrl = page.url();
+                const urlMatch = currentUrl.match(/instagram\.com\/reel\/[^/]+\/?(?:\?.*)?$/);
+                if (urlMatch) {
+                    // Try to find username in page
                     const usernameSelectors = [
-                        // Main header username link
-                        'article header h2 a',
-                        'header h2 a',
-                        'article header div div div a[href^="/"]',
-                        // Alternative patterns
-                        'span[dir="auto"] a[href^="/"]',
-                        'a[role="link"][href^="/"]:not([href="/"])',
-                        // Fallback to any profile link in header
-                        'header a[href^="/"]:not([href="/"])',
+                        'header h2 a, header h1 a',
+                        'a[href^="/"]:not([href="/"]):not([href*="reel"]):not([href*="audio"])',
+                        'span[dir="auto"] a[href^="/"]'
                     ];
                     
                     for (const selector of usernameSelectors) {
-                        const elements = await page.$$(selector);
-                        for (const element of elements) {
-                            const href = await page.evaluate((el: Element) => (el as HTMLAnchorElement).href, element);
-                            const text = await page.evaluate((el: Element) => el.textContent, element);
-                            
-                            if (href && text) {
-                                const usernameFromHref = href.match(/instagram\.com\/([^/]+)/)?.[1];
-                                const usernameFromText = text.trim();
+                        try {
+                            const element = await page.$(selector);
+                            if (element) {
+                                const href = await page.evaluate((el: Element) => (el as HTMLAnchorElement).href, element);
+                                const text = await page.evaluate((el: Element) => el.textContent, element);
                                 
-                                // Prefer href extraction, fallback to text
-                                const username = usernameFromHref || usernameFromText;
-                                if (username && !username.includes('•') && !username.includes('instagram.com') && username.length > 0) {
-                                    reelData.username = username;
+                                if (href) {
+                                    const match = href.match(/instagram\.com\/([^/?]+)/);
+                                    if (match && match[1] && !match[1].includes('reel') && !match[1].includes('audio')) {
+                                        reelData.username = match[1];
+                                        console.log('Found username from href:', match[1]);
+                                        break;
+                                    }
+                                }
+                                
+                                if (text && text.trim() && !text.includes('•')) {
+                                    reelData.username = text.trim();
+                                    console.log('Found username from text:', text.trim());
                                     break;
                                 }
                             }
+                        } catch (e) {
+                            // Continue to next selector
                         }
-                        if (reelData.username) break;
                     }
-                } catch (e) {
-                    console.log('Could not extract username:', e);
                 }
+            } catch (e) {
+                console.log('Username extraction error:', e);
             }
 
-            // Extract audio/music info with better targeting
-            if (!reelData.audioUsed) {
-                try {
-                    const audioSelectors = [
-                        // Modern audio attribution patterns
-                        'div[class*="music"] span',
-                        'div[class*="audio"] span',
-                        'a[href*="/audio-page/"]',
-                        '[data-testid="audio-attribution"]',
-                        // Text-based approaches
-                        'span:contains("Original audio")',
-                        'span:contains("•")', // Audio separator pattern
-                    ];
-                    
-                    // Also try text content analysis
-                    const allText = await page.evaluate(() => document.body.textContent || '');
-                    
-                    // Look for audio patterns in text
-                    const audioPatterns = [
-                        /([^\n•]+)\s*•\s*([^\n•]+)/g, // Artist • Song pattern
-                        /(Original audio)/i,
-                        /(Audio is muted)/i
-                    ];
-                    
-                    for (const pattern of audioPatterns) {
-                        const match = allText.match(pattern);
-                        if (match) {
-                            reelData.audioUsed = match[0].trim();
+            // Extract engagement metrics using regex (fastest method)
+            try {
+                // Likes
+                const likesPatterns = [
+                    /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*likes?/gi,
+                    /Liked by\s+.*?and\s+(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*others/gi
+                ];
+                
+                for (const pattern of likesPatterns) {
+                    const match = pageText.match(pattern);
+                    if (match && match[0]) {
+                        const numMatch = match[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
+                        if (numMatch) {
+                            reelData.likes = parseMetric(numMatch[1]);
+                            console.log('Found likes:', reelData.likes);
                             break;
                         }
                     }
-                    
-                    // If no text pattern, try DOM selectors
-                    if (!reelData.audioUsed) {
-                        for (const selector of audioSelectors) {
-                            const audioElement = await page.$(selector);
-                            if (audioElement) {
-                                const audio = await page.evaluate((el: Element) => el.textContent, audioElement);
-                                if (audio && audio.trim() && audio.length > 3) {
-                                    reelData.audioUsed = audio.trim();
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Fallback
-                    if (!reelData.audioUsed) {
-                        reelData.audioUsed = 'Audio not detected';
-                    }
-                } catch (e) {
-                    console.log('Could not extract audio info:', e);
-                    reelData.audioUsed = 'Audio extraction failed';
                 }
+                
+                // Views
+                const viewsMatch = pageText.match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*(?:views?|plays?)/gi);
+                if (viewsMatch && viewsMatch[0]) {
+                    const numMatch = viewsMatch[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
+                    if (numMatch) {
+                        reelData.views = parseMetric(numMatch[1]);
+                        console.log('Found views:', reelData.views);
+                    }
+                }
+                
+                // Comments
+                const commentsMatch = pageText.match(/(?:View all\s+)?(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*comments?/gi);
+                if (commentsMatch && commentsMatch[0]) {
+                    const numMatch = commentsMatch[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
+                    if (numMatch) {
+                        reelData.comments = parseMetric(numMatch[1]);
+                        console.log('Found comments:', reelData.comments);
+                    }
+                }
+            } catch (e) {
+                console.log('Metrics extraction error:', e);
             }
 
-            // Extract engagement metrics with enhanced pattern matching
-            if (!reelData.likes || !reelData.views || !reelData.comments) {
-                try {
-                    // Get page text for regex analysis
-                    const pageText = await page.evaluate(() => document.body.textContent || '');
-                    
-                    // Enhanced regex patterns for metrics
-                    const patterns = {
-                        likes: [
-                            /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*likes?/gi,
-                            /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*like/gi,
-                            /Liked by\s+.*?and\s+(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*others/gi
-                        ],
-                        views: [
-                            /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*views?/gi,
-                            /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*plays?/gi
-                        ],
-                        comments: [
-                            /View all\s+(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*comments?/gi,
-                            /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*comments?/gi
-                        ]
-                    };
-                    
-                    // Extract likes
-                    if (!reelData.likes) {
-                        for (const pattern of patterns.likes) {
-                            const match = pageText.match(pattern);
-                            if (match) {
-                                const numMatch = match[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
-                                if (numMatch) {
-                                    reelData.likes = parseMetric(numMatch[1]);
-                                    break;
-                                }
-                            }
-                        }
+            // Extract audio info using text patterns
+            try {
+                const audioPatterns = [
+                    /([^\n•]{3,50})\s*•\s*([^\n•]{3,50})/g, // Artist • Song
+                    /(Original audio)/gi,
+                    /(Audio is muted)/gi
+                ];
+                
+                for (const pattern of audioPatterns) {
+                    const match = pageText.match(pattern);
+                    if (match && match[0]) {
+                        reelData.audioUsed = match[0].trim();
+                        console.log('Found audio:', reelData.audioUsed);
+                        break;
                     }
-                    
-                    // Extract views
-                    if (!reelData.views) {
-                        for (const pattern of patterns.views) {
-                            const match = pageText.match(pattern);
-                            if (match) {
-                                const numMatch = match[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
-                                if (numMatch) {
-                                    reelData.views = parseMetric(numMatch[1]);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Extract comments
-                    if (!reelData.comments) {
-                        for (const pattern of patterns.comments) {
-                            const match = pageText.match(pattern);
-                            if (match) {
-                                const numMatch = match[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
-                                if (numMatch) {
-                                    reelData.comments = parseMetric(numMatch[1]);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Alternative: Try extracting from button attributes
-                    if (!reelData.likes || !reelData.comments) {
-                        const buttons = await page.$$('button, a');
-                        for (const button of buttons) {
-                            const ariaLabel = await page.evaluate((el: Element) => (el as HTMLElement).getAttribute('aria-label'), button);
-                            if (ariaLabel) {
-                                if (ariaLabel.includes('like') && !reelData.likes) {
-                                    const likeMatch = ariaLabel.match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
-                                    if (likeMatch) {
-                                        reelData.likes = parseMetric(likeMatch[1]);
-                                    }
-                                }
-                                if (ariaLabel.includes('comment') && !reelData.comments) {
-                                    const commentMatch = ariaLabel.match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
-                                    if (commentMatch) {
-                                        reelData.comments = parseMetric(commentMatch[1]);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                } catch (e) {
-                    console.log('Could not extract engagement metrics:', e);
                 }
+                
+                if (!reelData.audioUsed) {
+                    reelData.audioUsed = 'Audio not detected';
+                }
+            } catch (e) {
+                console.log('Audio extraction error:', e);
+                reelData.audioUsed = 'Audio extraction failed';
             }
 
-            // Extract caption/description with better selectors
-            if (!reelData.description) {
-                try {
-                    const captionSelectors = [
-                        // Modern Instagram caption patterns
-                        'article div[class*="caption"] span',
-                        'div[data-testid="post-caption"] span',
-                        'article div span[dir="auto"]',
-                        // Legacy patterns
-                        'article div div div div span',
-                        'div._a9zs span',
-                        'div[class*="_a9z"] span',
-                        // Fallback to any span with substantial text in article
-                        'article span'
-                    ];
-                    
-                    for (const selector of captionSelectors) {
+            // Extract caption - quick DOM search
+            try {
+                const captionSelectors = [
+                    'span[dir="auto"]',
+                    'div[class*="caption"] span',
+                    'article span'
+                ];
+                
+                for (const selector of captionSelectors) {
+                    try {
                         const elements = await page.$$(selector);
                         for (const element of elements) {
-                            const caption = await page.evaluate((el: Element) => el.textContent, element);
-                            if (caption && caption.trim().length > 10 && !caption.includes('likes') && !caption.includes('views')) {
-                                reelData.description = caption.trim();
-                                // Use first line as title if it's not too long
-                                const firstLine = caption.split('\n')[0].trim();
-                                if (firstLine.length <= 100 && firstLine.length > 3) {
+                            const text = await page.evaluate((el: Element) => el.textContent, element);
+                            if (text && text.trim().length > 15 && 
+                                !text.includes('likes') && 
+                                !text.includes('views') && 
+                                !text.includes('comments') &&
+                                !text.includes('Follow')) {
+                                reelData.description = text.trim();
+                                // First line as title
+                                const firstLine = text.split('\n')[0].trim();
+                                if (firstLine.length <= 100 && firstLine.length > 5) {
                                     reelData.title = firstLine;
                                 }
+                                console.log('Found caption:', reelData.description.substring(0, 50) + '...');
                                 break;
                             }
                         }
                         if (reelData.description) break;
+                    } catch (e) {
+                        // Continue to next selector
                     }
-                } catch (e) {
-                    console.log('Could not extract caption:', e);
                 }
+            } catch (e) {
+                console.log('Caption extraction error:', e);
             }
 
             // Log extracted data
