@@ -228,12 +228,32 @@ const crawler = new PuppeteerCrawler({
                 
                 // Comments (if not found above)
                 if (!reelData.comments) {
+                    // Try exact selector from HTML inspection
+                    try {
+                        const commentsLink = await page.$('a[href*="/comments/"] span');
+                        if (commentsLink) {
+                            const commentsText = await page.evaluate((el: Element) => el.textContent, commentsLink);
+                            if (commentsText) {
+                                const numMatch = commentsText.match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
+                                if (numMatch) {
+                                    reelData.comments = parseMetric(numMatch[1]);
+                                    console.log('Found comments from link:', reelData.comments);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Comments link extraction failed:', e);
+                    }
+                }
+                
+                // Fallback: regex pattern for comments
+                if (!reelData.comments) {
                     const commentsMatch = pageText.match(/(?:View all\s+)?(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*comments?/gi);
                     if (commentsMatch && commentsMatch[0]) {
                         const numMatch = commentsMatch[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
                         if (numMatch) {
                             reelData.comments = parseMetric(numMatch[1]);
-                            console.log('Found comments:', reelData.comments);
+                            console.log('Found comments with regex:', reelData.comments);
                         }
                     }
                 }
@@ -242,30 +262,45 @@ const crawler = new PuppeteerCrawler({
                 console.log('Metrics extraction error:', e);
             }
 
-            // Extract audio info with cleaner patterns
+            // Extract audio info using the exact selector from HTML inspection
             try {
                 console.log('Extracting audio information...');
                 
-                // Strategy 1: Look for clean "Artist • Song" pattern (this is the audio track)
-                const cleanAudioPattern = /([A-Za-z][A-Za-z0-9\s]{2,30})\s*•\s*([A-Za-z][A-Za-z0-9\s]{2,30})/g;
-                const cleanAudioMatch = pageText.match(cleanAudioPattern);
+                // Strategy 1: Use the exact audio link selector
+                try {
+                    const audioLink = await page.$('a[href*="/reels/audio/"]');
+                    if (audioLink) {
+                        const audioText = await page.evaluate((el: Element) => el.textContent, audioLink);
+                        if (audioText && audioText.trim()) {
+                            reelData.audioUsed = audioText.trim();
+                            console.log('Found audio from audio link:', audioText.trim());
+                        }
+                    }
+                } catch (e) {
+                    console.log('Audio link selector failed:', e);
+                }
                 
-                if (cleanAudioMatch) {
-                    // Find the best match (avoid UI text)
-                    for (const match of cleanAudioMatch) {
-                        if (!match.includes('Sign') && 
-                            !match.includes('Log') && 
-                            !match.includes('Follow') &&
-                            !match.includes('Verified') &&
-                            match.length < 100) {
-                            reelData.audioUsed = match.trim();
-                            console.log('Found audio track:', match.trim());
-                            break;
+                // Strategy 2: Look for clean "Artist • Song" pattern in text (backup)
+                if (!reelData.audioUsed) {
+                    const cleanAudioPattern = /([A-Za-z][A-Za-z0-9\s]{2,30})\s*•\s*([A-Za-z][A-Za-z0-9\s]{2,30})/g;
+                    const cleanAudioMatch = pageText.match(cleanAudioPattern);
+                    
+                    if (cleanAudioMatch) {
+                        for (const match of cleanAudioMatch) {
+                            if (!match.includes('Sign') && 
+                                !match.includes('Log') && 
+                                !match.includes('Follow') &&
+                                !match.includes('Verified') &&
+                                match.length < 100) {
+                                reelData.audioUsed = match.trim();
+                                console.log('Found audio from pattern:', match.trim());
+                                break;
+                            }
                         }
                     }
                 }
                 
-                // Strategy 2: Look for standalone audio patterns
+                // Strategy 3: Fallback to status patterns
                 if (!reelData.audioUsed) {
                     const audioPatterns = [
                         /Original audio/gi,
@@ -284,23 +319,7 @@ const crawler = new PuppeteerCrawler({
                     }
                 }
                 
-                // Strategy 3: Try to find audio links or selectors
-                if (!reelData.audioUsed) {
-                    try {
-                        const audioElement = await page.$('a[href*="audio"]');
-                        if (audioElement) {
-                            const text = await page.evaluate((el: Element) => el.textContent, audioElement);
-                            if (text && text.trim().length > 3 && text.trim().length < 100) {
-                                reelData.audioUsed = text.trim();
-                                console.log('Found audio from link:', text.trim());
-                            }
-                        }
-                    } catch (e) {
-                        // Continue
-                    }
-                }
-                
-                // Fallback
+                // Final fallback
                 if (!reelData.audioUsed) {
                     reelData.audioUsed = 'Audio not detected';
                 }
@@ -309,47 +328,64 @@ const crawler = new PuppeteerCrawler({
                 reelData.audioUsed = 'Audio extraction failed';
             }
 
-            // Extract caption/description - find the actual user caption (NOT the audio)
+            // Extract caption/description using exact H1 selector from inspection
             try {
                 console.log('Extracting user caption...');
                 
-                const captionSelectors = [
-                    'span[dir="auto"]',
-                    'div[class*="caption"] span',
-                    'article span'
-                ];
-                
-                for (const selector of captionSelectors) {
-                    try {
-                        const elements = await page.$$(selector);
-                        for (const element of elements) {
-                            const text = await page.evaluate((el: Element) => el.textContent, element);
-                            if (text && text.trim().length > 10 && 
-                                !text.includes('likes') && 
-                                !text.includes('views') && 
-                                !text.includes('comments') &&
-                                !text.includes('Follow') &&
-                                !text.includes('•') &&  // Exclude audio info (has bullet)
-                                !text.includes('The Black Eyed Peas') && // Exclude audio info
-                                !text.includes('Sign') &&
-                                !text.includes('Log')) {
-                                reelData.description = text.trim();
-                                // First line as title
-                                const firstLine = text.split('\n')[0].trim();
-                                if (firstLine.length <= 100 && firstLine.length > 5) {
-                                    reelData.title = firstLine;
-                                }
-                                console.log('Found user caption:', reelData.description.substring(0, 50) + '...');
-                                break;
-                            }
+                // Strategy 1: Use exact H1 selector from HTML inspection
+                try {
+                    const h1Element = await page.$('h1._ap3a._aaco._aacu._aacx._aad7._aade');
+                    if (h1Element) {
+                        const captionText = await page.evaluate((el: Element) => el.textContent, h1Element);
+                        if (captionText && captionText.trim()) {
+                            reelData.description = captionText.trim();
+                            reelData.title = captionText.trim();
+                            console.log('Found caption from H1:', captionText.trim());
                         }
-                        if (reelData.description) break;
-                    } catch (e) {
-                        // Continue to next selector
+                    }
+                } catch (e) {
+                    console.log('H1 selector failed:', e);
+                }
+                
+                // Strategy 2: Fallback to other caption selectors
+                if (!reelData.description) {
+                    const captionSelectors = [
+                        'h1[dir="auto"]',
+                        'h1',
+                        'span[dir="auto"]',
+                        'div[class*="caption"] span',
+                        'article span'
+                    ];
+                    
+                    for (const selector of captionSelectors) {
+                        try {
+                            const elements = await page.$$(selector);
+                            for (const element of elements) {
+                                const text = await page.evaluate((el: Element) => el.textContent, element);
+                                if (text && text.trim().length > 10 && 
+                                    !text.includes('likes') && 
+                                    !text.includes('views') && 
+                                    !text.includes('comments') &&
+                                    !text.includes('Follow') &&
+                                    !text.includes('•') &&  // Exclude audio info (has bullet)
+                                    !text.includes('The Black Eyed Peas') && // Exclude audio info
+                                    !text.includes('Sign') &&
+                                    !text.includes('Log') &&
+                                    text !== reelData.username) {
+                                    reelData.description = text.trim();
+                                    reelData.title = text.trim();
+                                    console.log('Found user caption:', text.trim());
+                                    break;
+                                }
+                            }
+                            if (reelData.description) break;
+                        } catch (e) {
+                            // Continue to next selector
+                        }
                     }
                 }
                 
-                // Strategy 2: Look for caption patterns in page text (with emojis)
+                // Strategy 3: Look for caption patterns in page text (with emojis)
                 if (!reelData.description) {
                     // Look for text that contains emojis or typical caption patterns
                     const lines = pageText.split('\n');
@@ -362,9 +398,10 @@ const crawler = new PuppeteerCrawler({
                             !cleanLine.includes('Follow') &&
                             !cleanLine.includes('•') &&
                             !cleanLine.includes('The Black Eyed Peas') &&
-                            (cleanLine.includes('🔥') || cleanLine.includes('😎') || cleanLine.includes('❤️') || cleanLine.toLowerCase().includes('rock'))) {
+                            cleanLine !== reelData.username &&
+                            (cleanLine.includes('🕹') || cleanLine.includes('🤖') || cleanLine.includes('🎥') || cleanLine.includes('❤️') || cleanLine.toLowerCase().includes('rock'))) {
                             reelData.description = cleanLine;
-                            reelData.title = cleanLine.split(' ')[0] + ' ' + cleanLine.split(' ')[1] + ' ' + cleanLine.split(' ')[2]; // First few words
+                            reelData.title = cleanLine;
                             console.log('Found caption with emojis:', cleanLine);
                             break;
                         }
