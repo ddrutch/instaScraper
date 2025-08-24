@@ -91,39 +91,63 @@ const crawler = new PuppeteerCrawler({
             const pageText = await page.evaluate(() => document.body.textContent || '');
             console.log('Page text length:', pageText.length);
             
-            // Extract username - focus on working patterns
+            // Extract username - avoid login/signup links
             try {
-                // Method 1: URL-based extraction (most reliable)
-                const currentUrl = page.url();
-                const urlMatch = currentUrl.match(/instagram\.com\/reel\/[^/]+\/?(?:\?.*)?$/);
-                if (urlMatch) {
-                    // Try to find username in page
-                    const usernameSelectors = [
-                        'header h2 a, header h1 a',
-                        'a[href^="/"]:not([href="/"]):not([href*="reel"]):not([href*="audio"])',
-                        'span[dir="auto"] a[href^="/"]'
+                // Method 1: Look for profile links that aren't login/signup
+                const profileLinks = await page.$$('a[href^="/"]:not([href="/"]):not([href*="accounts"]):not([href*="login"]):not([href*="signup"])');
+                
+                for (const link of profileLinks) {
+                    const href = await page.evaluate((el: Element) => (el as HTMLAnchorElement).href, link);
+                    const text = await page.evaluate((el: Element) => el.textContent, link);
+                    
+                    if (href) {
+                        // Extract username from href like https://instagram.com/maykonreplay/
+                        const match = href.match(/instagram\.com\/([^/?#]+)\/?$/);
+                        if (match && match[1] && 
+                            !match[1].includes('accounts') && 
+                            !match[1].includes('reel') && 
+                            !match[1].includes('audio') && 
+                            !match[1].includes('explore') &&
+                            match[1].length > 1) {
+                            reelData.username = match[1];
+                            console.log('Found username from profile link:', match[1]);
+                            break;
+                        }
+                    }
+                    
+                    // Fallback: clean text content
+                    if (text && text.trim() && 
+                        !text.includes('Follow') && 
+                        !text.includes('Sign') &&
+                        !text.includes('Log') &&
+                        !text.includes('•') &&
+                        text.length > 1 && text.length < 30) {
+                        reelData.username = text.trim();
+                        console.log('Found username from text:', text.trim());
+                        break;
+                    }
+                }
+                
+                // Method 2: Try header username specifically
+                if (!reelData.username) {
+                    const headerSelectors = [
+                        'header h2 a',
+                        'header h1 a', 
+                        'header a[href^="/"]:not([href*="accounts"])',
                     ];
                     
-                    for (const selector of usernameSelectors) {
+                    for (const selector of headerSelectors) {
                         try {
                             const element = await page.$(selector);
                             if (element) {
                                 const href = await page.evaluate((el: Element) => (el as HTMLAnchorElement).href, element);
-                                const text = await page.evaluate((el: Element) => el.textContent, element);
-                                
                                 if (href) {
-                                    const match = href.match(/instagram\.com\/([^/?]+)/);
-                                    if (match && match[1] && !match[1].includes('reel') && !match[1].includes('audio')) {
+                                    const match = href.match(/instagram\.com\/([^/?#]+)\/?$/);
+                                    if (match && match[1] && !match[1].includes('accounts')) {
                                         reelData.username = match[1];
-                                        console.log('Found username from href:', match[1]);
+                                        console.log('Found username from header:', match[1]);
                                         break;
                                     }
-                                }
-                                
-                                if (text && text.trim() && !text.includes('•')) {
-                                    reelData.username = text.trim();
-                                    console.log('Found username from text:', text.trim());
-                                    break;
                                 }
                             }
                         } catch (e) {
@@ -135,66 +159,148 @@ const crawler = new PuppeteerCrawler({
                 console.log('Username extraction error:', e);
             }
 
-            // Extract engagement metrics using regex (fastest method)
+            // Extract engagement metrics with better number detection
             try {
-                // Likes
-                const likesPatterns = [
-                    /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*likes?/gi,
-                    /Liked by\s+.*?and\s+(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*others/gi
-                ];
+                console.log('Extracting engagement metrics...');
                 
-                for (const pattern of likesPatterns) {
-                    const match = pageText.match(pattern);
-                    if (match && match[0]) {
-                        const numMatch = match[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
+                // Strategy 1: Look for large numbers in page text first
+                const largeNumberPattern = /(\d{1,3}(?:,\d{3})+)\s*(?:likes?|views?|comments?)/gi;
+                let largeNumberMatches = pageText.match(largeNumberPattern);
+                
+                if (largeNumberMatches) {
+                    console.log('Found large number patterns:', largeNumberMatches);
+                    for (const match of largeNumberMatches) {
+                        if (match.includes('like')) {
+                            const numMatch = match.match(/(\d{1,3}(?:,\d{3})+)/i);
+                            if (numMatch) {
+                                reelData.likes = parseMetric(numMatch[1]);
+                                console.log('Found large likes number:', reelData.likes);
+                            }
+                        }
+                        if (match.includes('view')) {
+                            const numMatch = match.match(/(\d{1,3}(?:,\d{3})+)/i);
+                            if (numMatch) {
+                                reelData.views = parseMetric(numMatch[1]);
+                                console.log('Found large views number:', reelData.views);
+                            }
+                        }
+                        if (match.includes('comment')) {
+                            const numMatch = match.match(/(\d{1,3}(?:,\d{3})+)/i);
+                            if (numMatch) {
+                                reelData.comments = parseMetric(numMatch[1]);
+                                console.log('Found large comments number:', reelData.comments);
+                            }
+                        }
+                    }
+                }
+                
+                // Strategy 2: Standard patterns with K/M notation
+                if (!reelData.likes) {
+                    const likesPatterns = [
+                        /(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*likes?/gi,
+                        /Liked by\s+.*?and\s+(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*others/gi
+                    ];
+                    
+                    for (const pattern of likesPatterns) {
+                        const match = pageText.match(pattern);
+                        if (match && match[0]) {
+                            const numMatch = match[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
+                            if (numMatch) {
+                                reelData.likes = parseMetric(numMatch[1]);
+                                console.log('Found likes with pattern:', reelData.likes);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Views (if not found above)
+                if (!reelData.views) {
+                    const viewsMatch = pageText.match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*(?:views?|plays?)/gi);
+                    if (viewsMatch && viewsMatch[0]) {
+                        const numMatch = viewsMatch[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
                         if (numMatch) {
-                            reelData.likes = parseMetric(numMatch[1]);
-                            console.log('Found likes:', reelData.likes);
+                            reelData.views = parseMetric(numMatch[1]);
+                            console.log('Found views:', reelData.views);
+                        }
+                    }
+                }
+                
+                // Comments (if not found above)
+                if (!reelData.comments) {
+                    const commentsMatch = pageText.match(/(?:View all\s+)?(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*comments?/gi);
+                    if (commentsMatch && commentsMatch[0]) {
+                        const numMatch = commentsMatch[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
+                        if (numMatch) {
+                            reelData.comments = parseMetric(numMatch[1]);
+                            console.log('Found comments:', reelData.comments);
+                        }
+                    }
+                }
+                
+            } catch (e) {
+                console.log('Metrics extraction error:', e);
+            }
+
+            // Extract audio info with cleaner patterns
+            try {
+                console.log('Extracting audio information...');
+                
+                // Strategy 1: Look for clean "Artist • Song" pattern
+                const cleanAudioPattern = /([A-Za-z][A-Za-z0-9\s]{2,30})\s*•\s*([A-Za-z][A-Za-z0-9\s]{2,30})/g;
+                const cleanAudioMatch = pageText.match(cleanAudioPattern);
+                
+                if (cleanAudioMatch) {
+                    // Find the best match (avoid UI text)
+                    for (const match of cleanAudioMatch) {
+                        if (!match.includes('Sign') && 
+                            !match.includes('Log') && 
+                            !match.includes('Follow') &&
+                            !match.includes('Verified') &&
+                            match.length < 100) {
+                            reelData.audioUsed = match.trim();
+                            console.log('Found clean audio pattern:', match.trim());
                             break;
                         }
                     }
                 }
                 
-                // Views
-                const viewsMatch = pageText.match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*(?:views?|plays?)/gi);
-                if (viewsMatch && viewsMatch[0]) {
-                    const numMatch = viewsMatch[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
-                    if (numMatch) {
-                        reelData.views = parseMetric(numMatch[1]);
-                        console.log('Found views:', reelData.views);
+                // Strategy 2: Look for standalone audio patterns
+                if (!reelData.audioUsed) {
+                    const audioPatterns = [
+                        /Original audio/gi,
+                        /Audio is muted/gi,
+                        /Sound on/gi,
+                        /Sound off/gi
+                    ];
+                    
+                    for (const pattern of audioPatterns) {
+                        const match = pageText.match(pattern);
+                        if (match) {
+                            reelData.audioUsed = match[0];
+                            console.log('Found audio status:', match[0]);
+                            break;
+                        }
                     }
                 }
                 
-                // Comments
-                const commentsMatch = pageText.match(/(?:View all\s+)?(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)\s*comments?/gi);
-                if (commentsMatch && commentsMatch[0]) {
-                    const numMatch = commentsMatch[0].match(/(\d{1,3}(?:[,.]\d{3})*(?:\.\d+)?[KMB]?)/i);
-                    if (numMatch) {
-                        reelData.comments = parseMetric(numMatch[1]);
-                        console.log('Found comments:', reelData.comments);
-                    }
-                }
-            } catch (e) {
-                console.log('Metrics extraction error:', e);
-            }
-
-            // Extract audio info using text patterns
-            try {
-                const audioPatterns = [
-                    /([^\n•]{3,50})\s*•\s*([^\n•]{3,50})/g, // Artist • Song
-                    /(Original audio)/gi,
-                    /(Audio is muted)/gi
-                ];
-                
-                for (const pattern of audioPatterns) {
-                    const match = pageText.match(pattern);
-                    if (match && match[0]) {
-                        reelData.audioUsed = match[0].trim();
-                        console.log('Found audio:', reelData.audioUsed);
-                        break;
+                // Strategy 3: Try to find audio links or selectors
+                if (!reelData.audioUsed) {
+                    try {
+                        const audioElement = await page.$('a[href*="audio"]');
+                        if (audioElement) {
+                            const text = await page.evaluate((el: Element) => el.textContent, audioElement);
+                            if (text && text.trim().length > 3 && text.trim().length < 100) {
+                                reelData.audioUsed = text.trim();
+                                console.log('Found audio from link:', text.trim());
+                            }
+                        }
+                    } catch (e) {
+                        // Continue
                     }
                 }
                 
+                // Fallback
                 if (!reelData.audioUsed) {
                     reelData.audioUsed = 'Audio not detected';
                 }
