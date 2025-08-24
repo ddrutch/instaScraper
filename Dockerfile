@@ -20,6 +20,9 @@ COPY . ./
 # Copy source files - no build needed since we use tsx
 COPY . ./
 
+# Debug: Show what we have
+RUN echo "=== FILES IN BUILDER ===" && ls -la && echo "=== SRC CONTENT ===" && ls -la src/
+
 # Create final image
 FROM apify/actor-node-puppeteer-chrome:22
 
@@ -43,8 +46,9 @@ RUN npm --quiet set progress=false \
     && npm --version \
     && rm -r ~/.npm
 
-# Copy source files from builder image
+# Copy all necessary files from builder image  
 COPY --from=builder /usr/src/app/src ./src
+COPY --from=builder /usr/src/app/.actor ./.actor
 
 # Next, copy the remaining files and directories with the source code.
 # Since we do this after NPM install, quick build will be really fast
