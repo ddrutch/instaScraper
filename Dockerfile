@@ -17,12 +17,8 @@ RUN npm install --include=dev --audit=false
 # in the base image.
 COPY . ./
 
-# Install all dependencies and build the project.
-# Don't audit to speed up the installation.
-RUN npm run build
-
-# Ensure dist directory exists and has content
-RUN if [ ! -d "dist" ]; then echo "Creating dist directory and copying from src"; mkdir -p dist && cp -r src/* dist/; fi
+# Copy source files - no build needed since we use tsx
+COPY . ./
 
 # Create final image
 FROM apify/actor-node-puppeteer-chrome:22
@@ -47,8 +43,8 @@ RUN npm --quiet set progress=false \
     && npm --version \
     && rm -r ~/.npm
 
-# Copy built JS files from builder image
-COPY --from=builder /usr/src/app/dist ./dist
+# Copy source files from builder image
+COPY --from=builder /usr/src/app/src ./src
 
 # Next, copy the remaining files and directories with the source code.
 # Since we do this after NPM install, quick build will be really fast

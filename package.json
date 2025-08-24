@@ -8,7 +8,8 @@
     },
     "dependencies": {
         "apify": "^3.4.2",
-        "@crawlee/puppeteer": "^3.0.0"
+        "@crawlee/puppeteer": "^3.0.0",
+        "tsx": "^4.20.3"
     },
     "devDependencies": {
         "@apify/eslint-config": "^1.0.0",
@@ -18,13 +19,12 @@
         "eslint-config-prettier": "^10.1.5",
         "globals": "^16.2.0",
         "prettier": "^3.5.3",
-        "tsx": "^4.20.3",
         "typescript": "^5.8.3",
         "typescript-eslint": "^8.34.1"
     },
     "scripts": {
         "start": "npm run start:dev",
-        "start:prod": "node dist/main.js",
+        "start:prod": "tsx src/main.ts",
         "start:dev": "tsx src/main.ts",
         "build": "tsc",
         "lint": "eslint",
