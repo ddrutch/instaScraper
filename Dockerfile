@@ -21,6 +21,9 @@ COPY . ./
 # Don't audit to speed up the installation.
 RUN npm run build
 
+# Ensure dist directory exists and has content
+RUN if [ ! -d "dist" ]; then echo "Creating dist directory and copying from src"; mkdir -p dist && cp -r src/* dist/; fi
+
 # Create final image
 FROM apify/actor-node-puppeteer-chrome:22
 
